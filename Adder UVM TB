@@ -1,0 +1,255 @@
+// Code your testbench here
+// or browse Examples
+// Code your testbench here
+// or browse Examples
+
+`include "uvm_macros.svh"
+import uvm_pkg::*;
+
+
+///////////Transaction//////////
+class trans extends uvm_sequence_item;
+  
+  rand bit [3:0] a;
+  rand bit [3:0] b;
+  bit [4:0] y;
+  
+  function new (input string inst= "TRANS");
+    super.new(inst);
+  endfunction
+  
+  `uvm_object_utils_begin(trans)
+  `uvm_field_int(a, UVM_DEFAULT)
+  `uvm_field_int(b,UVM_DEFAULT)
+  `uvm_field_int(y,UVM_DEFAULT)
+  `uvm_object_utils_end
+endclass
+
+////////sequence/generator/////////////////
+
+class seq extends uvm_sequence #(trans);
+  `uvm_object_utils(seq)
+ 
+  trans t;
+  integer i ;
+  
+  function new(input string inst= "SEQ");
+    super.new(inst);
+  endfunction
+  
+
+  //Inside sequence we donot have run_phase/build_phase , we only have body
+  virtual task body();
+     t= trans::type_id::create("TRANS");
+    for (i=0; i<10;i++) begin
+      start_item(t);
+      t.randomize();
+      `uvm_info("SEQ","Data send to driver", UVM_NONE);
+      t.print(uvm_default_line_printer);
+      
+      finish_item(t);
+      #10;
+    end 
+  endtask
+    
+endclass
+
+                
+//////////driver///////////////////////////
+
+class driver extends uvm_driver #(trans);
+  `uvm_component_utils(driver);
+  
+  function new(input string inst= "DRIV" , uvm_component c);
+    super.new(inst,c);
+  endfunction
+  
+  trans data;
+  //inside a class and access interface , we need vitual keyword
+  virtual add_if aif;
+  
+  virtual function void build_phase(uvm_phase phase);
+    super.build_phase(phase);
+    data= trans:: type_id::create("TRANS");
+    if(!uvm_config_db #(virtual add_if)::get(this,"","aif",aif))
+      `uvm_info("DRIV", "Unable to access uvm_config_db", UVM_NONE);
+  endfunction
+  
+  virtual task run_phase(uvm_phase phase);
+    forever begin
+      seq_item_port.get_next_item(data);
+      aif.a= data.a;
+      aif.b = data.b;
+      `uvm_info("DRIV","Triggered DUT", UVM_NONE);
+      data.print(uvm_default_line_printer);
+      seq_item_port.item_done();
+    end
+  endtask
+endclass
+
+//////////////////////////MOnitor//////////////////////////////
+                
+ class monitor extends uvm_monitor;
+   `uvm_component_utils(monitor);
+    uvm_analysis_port #(trans) send;
+   function new(input string inst= "MON" , uvm_component c);
+     super.new(inst,c);
+     send= new("WRITE",this);
+  endfunction
+   
+   trans t;
+   virtual add_if aif;
+   
+   virtual function void build_phase(uvm_phase phase);
+    super.build_phase(phase);
+    t= trans:: type_id::create("TRANS");
+    if(!uvm_config_db #(virtual add_if)::get(this,"","aif",aif))
+      `uvm_info("MON", "Unable to access uvm_config_db", UVM_NONE);
+  endfunction
+   
+   virtual task run_phase(uvm_phase phase);
+    forever begin
+      #10;
+      t.a= aif.a;
+      t.b=aif.b;
+      t.y= aif.y;
+      `uvm_info("MON","Data send to scoreboard", UVM_NONE);
+      t.print(uvm_default_line_printer);
+      send.write(t);// sending to SB
+    end
+  endtask
+   
+ endclass
+                
+                
+ ///////////////////Scoreboard////////////////////
+                
+class scoreboard extends uvm_scoreboard;
+  `uvm_component_utils(scoreboard);
+  
+  uvm_analysis_imp #(trans,scoreboard) recv ; 
+  
+  function new(input string inst= "SB" , uvm_component c);
+    super.new(inst,c);
+    recv= new("READ",this);
+  endfunction
+  
+  trans data;
+  virtual function void build_phase(uvm_phase phase);
+    super.build_phase(phase);
+    data= trans:: type_id::create("TRANS");
+    
+  endfunction
+  
+  virtual  function void write (input trans t);
+    
+    data=t;
+    `uvm_info("SB", "Data Recd from mon", UVM_NONE);
+    data.print(uvm_default_line_printer);
+    if(data.y == data.a + data.b)
+      `uvm_info("SB", "Test Passed",UVM_NONE)
+    else 
+      `uvm_info("SB", "Test Failed",UVM_NONE);
+    
+  endfunction
+endclass
+
+/////////////////////////Agent////////////////////////////
+class agent extends uvm_agent;
+  `uvm_component_utils(agent);
+  
+  driver d;
+  monitor m;
+  uvm_sequencer #(trans) seqr;
+  
+  function new(input string inst= "Agent" , uvm_component c);
+    super.new(inst,c);
+
+  endfunction
+  
+  virtual function void build_phase(uvm_phase phase);
+    super.build_phase(phase);
+    m= monitor:: type_id::create("MON",this);
+    d= driver:: type_id::create("DRIV",this);
+    seqr= uvm_sequencer #(trans):: type_id::create("SEQR",this);
+  endfunction
+
+                  
+virtual function void connect_phase(uvm_phase phase);
+  super.connect_phase(phase);
+  d.seq_item_port.connect(seqr.seq_item_export);
+endfunction 
+endclass                
+                
+                
+////////////////////ENV//////////////////////////////
+class env extends uvm_env;
+  `uvm_component_utils(env);
+  
+  scoreboard s;
+  agent a;
+  
+  function new(input string inst= "Env" , uvm_component c);
+    super.new(inst,c);
+
+  endfunction   
+  
+  virtual function void build_phase(uvm_phase phase);
+    super.build_phase(phase);
+    a= agent:: type_id::create("AGENT",this);
+    s= scoreboard:: type_id::create("SB",this);
+    
+  endfunction
+  
+  virtual function void connect_phase(uvm_phase phase);
+  super.connect_phase(phase);
+    a.m.send.connect(s.recv);
+endfunction 
+endclass    
+///////////////////////TTEST//////////////////////////
+                  
+  class test extends uvm_test;
+    `uvm_component_utils(test);
+  
+  
+  
+    function new(input string inst= "TEST" , uvm_component c);
+      super.new(inst,c);
+
+    endfunction   
+  
+    seq s;
+    env e;              
+                
+   virtual function void build_phase(uvm_phase phase);
+    super.build_phase(phase);
+    s= seq:: type_id::create("SEQ",this);
+      e= env:: type_id::create("ENV",this);
+  endfunction
+      
+    virtual task run_phase(uvm_phase phase);
+        phase.raise_objection(phase);
+        s.start(e.a.seqr);
+        phase.drop_objection(phase);
+      endtask 
+      endclass
+      
+/////////////////TB///////////////
+      
+module add_tb();
+  test t;
+  add_if aif();
+  
+  add dut(.a(aif.a),.b(aif.b),.y(aif.y));
+  
+  initial begin
+  
+    $dumpfile("dump.vcd");
+      $dumpvars;
+    t= new("TEST",null);
+    uvm_config_db #(virtual add_if)::set(null,"*","aif",aif);
+    run_test();
+  end 
+  
+endmodule
+        
